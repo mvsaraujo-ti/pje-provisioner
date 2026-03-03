@@ -12,7 +12,9 @@ Implementação específica para Windows.
 """
 
 from pathlib import Path
+import ctypes
 import subprocess
+import time
 
 from config.pje_office_config import LATEST_VERSION, INSTALLER_PATH
 from app.utils.logger import get_logger
@@ -123,13 +125,7 @@ class PJeOfficeWindows:
                 "Instalador não encontrado no cache."
             )
 
-        command = [
-            str(INSTALLER_PATH),
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/SP-",
-        ]
+        parameters = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
 
         logger.info(
             "pje_office_install_started",
@@ -142,24 +138,81 @@ class PJeOfficeWindows:
 
         print("EXECUTING REAL INSTALLER")
 
-        process = subprocess.run(
-            command,
-            check=False
+        shell_execute_code = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
+            str(INSTALLER_PATH),
+            parameters,
+            None,
+            1,
         )
+
+        if shell_execute_code <= 32:
+            logger.info(
+                "pje_office_install_finished",
+                extra={
+                    "event": "pje_office_install_finished",
+                    "installer_path": str(INSTALLER_PATH),
+                    "return_code": shell_execute_code,
+                    "success": False,
+                },
+            )
+            raise RuntimeError(
+                "Falha ao iniciar instalação silenciosa com elevação. "
+                f"ShellExecuteW code: {shell_execute_code}"
+            )
+
+        installer_name = INSTALLER_PATH.name
+        timeout_seconds = 60 * 30
+        start_time = time.monotonic()
+
+        while time.monotonic() - start_time < timeout_seconds:
+            result = subprocess.run(
+                [
+                    "tasklist",
+                    "/FI",
+                    f"IMAGENAME eq {installer_name}",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if installer_name.lower() not in result.stdout.lower():
+                break
+            time.sleep(1)
+        else:
+            logger.info(
+                "pje_office_install_finished",
+                extra={
+                    "event": "pje_office_install_finished",
+                    "installer_path": str(INSTALLER_PATH),
+                    "return_code": 1,
+                    "success": False,
+                },
+            )
+            raise RuntimeError(
+                "Timeout aguardando término da instalação silenciosa do PJeOffice Pro."
+            )
+
+        install_success = self.is_installed() and not self.is_outdated()
+        return_code = 0 if install_success else 1
 
         logger.info(
             "pje_office_install_finished",
             extra={
                 "event": "pje_office_install_finished",
                 "installer_path": str(INSTALLER_PATH),
-                "return_code": process.returncode,
-                "success": process.returncode == 0,
+                "return_code": return_code,
+                "success": install_success,
             },
         )
 
-        if process.returncode != 0:
+        if not install_success:
             raise RuntimeError(
-                f"Falha na instalação silenciosa do PJeOffice Pro. Exit code: {process.returncode}"
+                "Falha na instalação silenciosa do PJeOffice Pro."
             )
 
         return True
