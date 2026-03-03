@@ -1,7 +1,7 @@
 import sys
 from PySide6.QtWidgets import QApplication
-from ui.main_window import MainWindow
-from utils.logger import get_logger
+from app.ui.main_window import MainWindow
+from app.utils.logger import get_logger
 
 
 def main():

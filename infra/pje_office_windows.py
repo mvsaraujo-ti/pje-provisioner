@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 
 from config.pje_office_config import LATEST_VERSION, INSTALLER_PATH
+from app.utils.logger import get_logger
 from app.utils.version_utils import normalize_version
 
 
@@ -115,6 +116,8 @@ class PJeOfficeWindows:
         Retorna True se exit code == 0
         """
 
+        logger = get_logger()
+
         if not INSTALLER_PATH.exists():
             raise FileNotFoundError(
                 "Instalador não encontrado no cache."
@@ -128,10 +131,35 @@ class PJeOfficeWindows:
             "/SP-",
         ]
 
-        process = subprocess.run(
-            command,
-            capture_output=True,
-            text=True
+        logger.info(
+            "pje_office_install_started",
+            extra={
+                "event": "pje_office_install_started",
+                "installer_path": str(INSTALLER_PATH),
+                "mode": "silent",
+            },
         )
 
-        return process.returncode == 0
+        print("EXECUTING REAL INSTALLER")
+
+        process = subprocess.run(
+            command,
+            check=False
+        )
+
+        logger.info(
+            "pje_office_install_finished",
+            extra={
+                "event": "pje_office_install_finished",
+                "installer_path": str(INSTALLER_PATH),
+                "return_code": process.returncode,
+                "success": process.returncode == 0,
+            },
+        )
+
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"Falha na instalação silenciosa do PJeOffice Pro. Exit code: {process.returncode}"
+            )
+
+        return True
