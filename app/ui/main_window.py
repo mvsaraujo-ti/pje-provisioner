@@ -48,6 +48,13 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("PJE Provisioner")
         self.setMinimumSize(700, 500)
+        self.setStyleSheet(
+            "QMainWindow { background-color: #f7f9fc; }"
+            "QListWidget { background-color: #ffffff; border: 1px solid #dce3ee; }"
+            "QTextEdit { background-color: #ffffff; border: 1px solid #dce3ee; }"
+            "QPushButton { background-color: #e8eef8; border: 1px solid #c8d6ea; padding: 6px; }"
+            "QPushButton:hover { background-color: #dfe8f7; }"
+        )
 
         self.scanner = SystemScanner()
         self.last_results = {}
@@ -101,7 +108,7 @@ class MainWindow(QMainWindow):
         footer = QLabel(
             "---------------------------------\n"
             "PJE Environment Provisioner\n\n"
-            "Versão: 0.2.0\n\n"
+            "Versão: 0.3.0\n\n"
             "Developer: Maxwell Araújo\n"
             "Contato: maxwellaraujoti@gmail.com\n"
             "---------------------------------"
@@ -177,11 +184,12 @@ class MainWindow(QMainWindow):
                 if browser_details.get("chrome_path"):
                     message += f"; Chrome path: {browser_details['chrome_path']}"
 
-            item_text = f"{component.upper()} → {message}"
+            status_symbol = "✔" if status else "✖"
+            item_text = f"{status_symbol} {component.upper()}\n{message}"
             item = QListWidgetItem(item_text)
 
             if status:
-                item.setForeground(QColor("green"))
+                item.setForeground(QColor("#1f8f4c"))
                 item.setIcon(
                     self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
                 )
@@ -196,7 +204,7 @@ class MainWindow(QMainWindow):
                     },
                 )
             else:
-                item.setForeground(QColor("red"))
+                item.setForeground(QColor("#c63d3d"))
                 item.setIcon(
                     self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical)
                 )

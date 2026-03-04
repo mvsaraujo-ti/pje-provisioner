@@ -50,6 +50,43 @@ def _classify_from_smartcard_reader(readers: list[dict]) -> tuple[str | None, st
     return None, None
 
 
+def _classify_driver_name(drivers: list[dict]) -> str | None:
+    if not drivers:
+        return None
+
+    names = [
+        str(item.get("display_name") or "").strip()
+        for item in drivers
+        if str(item.get("display_name") or "").strip()
+    ]
+    if not names:
+        return None
+
+    def is_safesign(name: str) -> bool:
+        lower = name.lower()
+        return (
+            "safesign" in lower
+            or "a.e.t. europe" in lower
+        )
+
+    def is_safenet(name: str) -> bool:
+        lower = name.lower()
+        return (
+            "safenet authentication client" in lower
+            or "safenet etoken" in lower
+            or "safenet" in lower
+            or "etoken" in lower
+        )
+
+    for name in names:
+        if is_safesign(name):
+            return name
+    for name in names:
+        if is_safenet(name):
+            return name
+    return names[0]
+
+
 def detect_token_hardware() -> dict:
     """
     Detecta token USB e consolida informacoes de driver instalado.
@@ -60,7 +97,7 @@ def detect_token_hardware() -> dict:
     drivers = detect_installed_token_drivers()
 
     token_connected = bool(smartcard_info.get("token_connected"))
-    if not token_connected and not drivers:
+    if not token_connected and not drivers and not smartcard_readers and not usb_devices:
         return {"token_detected": False}
 
     first = usb_devices[0] if usb_devices else (smartcard_readers[0] if smartcard_readers else {})
@@ -83,9 +120,23 @@ def detect_token_hardware() -> dict:
     if reader_name:
         model = reader_name
 
-    installed_driver_name = None
-    if drivers:
-        installed_driver_name = str(drivers[0].get("display_name") or "").strip() or None
+    installed_driver_name = _classify_driver_name(drivers)
+
+    if token_connected:
+        vendor_lower = str((vendor or "")).lower()
+        if "gd" in vendor_lower or "safesign" in vendor_lower:
+            hardware_label = "Token A3 GD conectado"
+        elif "safenet" in vendor_lower or "aladdin" in vendor_lower or "gemalto" in vendor_lower:
+            hardware_label = "Token A3 SafeNet conectado"
+        else:
+            hardware_label = f"Token detectado ({model or 'desconhecido'})"
+    else:
+        hardware_label = "Nenhum token conectado"
+
+    if installed_driver_name:
+        driver_label = f"{installed_driver_name} instalado"
+    else:
+        driver_label = "Driver não encontrado"
 
     return {
         "token_detected": token_connected,
@@ -100,6 +151,8 @@ def detect_token_hardware() -> dict:
         "reader": reader_name,
         "card": card_name,
         "provider": provider_name,
+        "hardware_label": hardware_label,
+        "driver_label": driver_label,
     }
 
 

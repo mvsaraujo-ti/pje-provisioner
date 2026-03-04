@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+
 from app.modules.browser_detector_module import detect_browsers
 from app.modules.token_detector_module import detect_token_hardware
 from infra.pje_office_windows import PJeOfficeWindows
@@ -7,6 +10,23 @@ from app.utils.logger import get_logger
 
 
 class SystemScanner:
+    @staticmethod
+    def _get_pje_office_version_from_path(exe_path: str) -> str | None:
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            f"(Get-Item '{exe_path}').VersionInfo.ProductVersion",
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        version = (result.stdout or "").strip()
+        return version or None
+
     def run_full_scan(self):
         logger = get_logger()
         results = {}
@@ -44,34 +64,19 @@ class SystemScanner:
             "details": token_info,
         }
 
+        logger.info("driver_scan_started", extra={"event": "driver_scan_started"})
         driver_installed = bool(token_driver)
-        driver_required = token_info.get("driver_required")
         if driver_installed and token_driver_version:
-            if driver_required and driver_required.lower() not in token_driver.lower():
-                driver_message = (
-                    f"Driver instalado: {token_driver} (versao {token_driver_version}) "
-                    f"- recomendado: {driver_required} - Status: DESATUALIZADO"
-                )
-            else:
-                driver_message = (
-                    f"Driver instalado: {token_driver} (versao {token_driver_version}) "
-                    " - Status: OK"
-                )
+            driver_message = f"TOKEN DRIVER - {token_driver} {token_driver_version}"
         elif driver_installed:
-            driver_message = f"TOKEN DRIVER - {token_driver} instalado - Status: OK"
+            driver_message = f"TOKEN DRIVER - {token_driver} instalado"
         else:
-            if driver_required:
-                driver_message = (
-                    "TOKEN DRIVER - NAO INSTALADO - "
-                    f"recomendado: {driver_required} - Status: ERRO"
-                )
-            else:
-                driver_message = "TOKEN DRIVER - NAO INSTALADO - Status: ERRO"
+            driver_message = "TOKEN DRIVER - Driver não encontrado"
 
         if driver_installed and not token_detected:
             if token_driver_version:
                 driver_message = (
-                    f"TOKEN DRIVER - {token_driver} instalado (versao {token_driver_version})"
+                    f"TOKEN DRIVER - {token_driver} {token_driver_version}"
                 )
             else:
                 driver_message = f"TOKEN DRIVER - {token_driver} instalado"
@@ -81,20 +86,34 @@ class SystemScanner:
             "message": driver_message,
             "details": token_info,
         }
+        logger.info(
+            "driver_scan_finished",
+            extra={"event": "driver_scan_finished", "driver_installed": driver_installed},
+        )
 
+        logger.info("pjeoffice_scan_started", extra={"event": "pjeoffice_scan_started"})
         windows = PJeOfficeWindows()
         pje_version = windows.get_pje_office_version()
+        if not pje_version:
+            alt_path = r"C:\Program Files (x86)\PJeOffice Pro\pjeoffice-pro.exe"
+            if os.path.exists(alt_path):
+                pje_version = self._get_pje_office_version_from_path(alt_path)
+
         if pje_version:
             pje_status = True
-            pje_message = f"PJe Office instalado (versao {pje_version})"
+            pje_message = f"PJE_OFFICE - PJeOffice Pro instalado (versão {pje_version})"
         else:
             pje_status = False
-            pje_message = "PJe Office nao instalado"
+            pje_message = "PJE_OFFICE - Não instalado"
 
         results["pje_office"] = {
             "status": pje_status,
             "message": pje_message,
         }
+        logger.info(
+            "pjeoffice_scan_finished",
+            extra={"event": "pjeoffice_scan_finished", "installed": pje_status},
+        )
 
         logger.info("browser_scan_started", extra={"event": "browser_scan_started"})
         browser_info = detect_browsers()
