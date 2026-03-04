@@ -18,6 +18,7 @@ import psutil
 
 from app.core.scanner import SystemScanner
 from app.core.pje_office_service import PJeOfficeService
+from app.modules.browser_module import run_browser_fix
 from infra.pje_office_windows import PJeOfficeWindows
 from app.utils.logger import get_logger
 
@@ -94,6 +95,20 @@ class MainWindow(QMainWindow):
         self.log_area.setReadOnly(True)
         self.log_area.setPlaceholderText("Logs aparecerão aqui...")
         layout.addWidget(self.log_area)
+
+        layout.addStretch(1)
+
+        footer = QLabel(
+            "---------------------------------\n"
+            "PJE Environment Provisioner\n\n"
+            "Versão: 0.2.0\n\n"
+            "Developer: Maxwell Araújo\n"
+            "Contato: maxwellaraujoti@gmail.com\n"
+            "---------------------------------"
+        )
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        footer.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(footer)
 
         # Eventos
         self.btn_scan.clicked.connect(self.run_scan)
@@ -286,7 +301,14 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Aplicando correções... %p%")
 
         fixed_results = {}
-        for component, data in self.last_results.items():
+        component_order = ["token", "driver", "pje_office", "browser"]
+        ordered_components = [c for c in component_order if c in self.last_results]
+        ordered_components.extend(
+            [c for c in self.last_results.keys() if c not in ordered_components]
+        )
+
+        for component in ordered_components:
+            data = self.last_results[component]
             status = data["status"]
 
             if component == "pje_office" and not status:
@@ -299,6 +321,37 @@ class MainWindow(QMainWindow):
                     "status": result["status"] in ("installed", "updated", "up_to_date"),
                     "message": result["message"],
                 }
+            elif component == "browser" and not status:
+                self.logger.info(
+                    "BROWSER_FIX_STARTED",
+                    extra={"event": "BROWSER_FIX_STARTED"},
+                )
+
+                browser_ok = False
+                try:
+                    browser_result = run_browser_fix()
+                    browser_ok = browser_result.get("status") == "ok"
+                except Exception:
+                    browser_ok = False
+
+                self.logger.info(
+                    "BROWSER_FIX_COMPLETED",
+                    extra={
+                        "event": "BROWSER_FIX_COMPLETED",
+                        "success": browser_ok,
+                    },
+                )
+
+                if browser_ok:
+                    fixed_results[component] = {
+                        "status": True,
+                        "message": "Correções de navegador aplicadas",
+                    }
+                else:
+                    fixed_results[component] = {
+                        "status": False,
+                        "message": "Falha ao corrigir navegador",
+                    }
             else:
                 fixed_results[component] = data
         total = len(fixed_results)
