@@ -11,11 +11,14 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QStyle,
 )
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QColor
+import os
+import psutil
 
 from app.core.scanner import SystemScanner
 from app.core.pje_office_service import PJeOfficeService
+from infra.pje_office_windows import PJeOfficeWindows
 from app.utils.logger import get_logger
 
 
@@ -37,6 +40,8 @@ class PJeOfficeWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    PJE_OFFICE_EXECUTABLE = r"C:\Program Files\PJeOffice Pro\pjeoffice-pro.exe"
+
     def __init__(self):
         super().__init__()
 
@@ -47,6 +52,11 @@ class MainWindow(QMainWindow):
         self.last_results = {}
         self.logger = get_logger()
         self.fix_worker = None
+        self.waiting_pje_office_install = False
+        self.pje_office_progress_value = 0
+        self.pje_office_timer = QTimer(self)
+        self.pje_office_timer.setInterval(1000)
+        self.pje_office_timer.timeout.connect(self._check_pje_office_installation)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -184,6 +194,13 @@ class MainWindow(QMainWindow):
 
         if needs_pje_office_fix:
             print("run_fix: calling REAL SERVICE in worker thread")
+            self.waiting_pje_office_install = True
+            self.pje_office_progress_value = 0
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.progress.setFormat("Instalando PJe Office Pro... %p%")
+            self.log_area.append("Instalando PJe Office Pro...")
+            self.pje_office_timer.start()
             self.fix_worker = PJeOfficeWorker()
             self.fix_worker.finished.connect(self._on_fix_finished)
             self.fix_worker.start()
@@ -196,10 +213,74 @@ class MainWindow(QMainWindow):
         if self.fix_worker is not None:
             self.fix_worker.deleteLater()
             self.fix_worker = None
+
+        if self.pje_office_timer.isActive():
+            self.pje_office_timer.stop()
+
+        if self.waiting_pje_office_install:
+            install_ok = (
+                result is not None
+                and result.get("status") in ("installed", "updated", "up_to_date")
+            )
+            validated = os.path.exists(self.PJE_OFFICE_EXECUTABLE)
+
+            if install_ok and validated:
+                result = {
+                    "status": "installed",
+                    "message": "PJe Office instalado com sucesso.",
+                }
+                self.log_area.append("PJe Office instalado com sucesso.")
+                self.progress.setRange(0, 100)
+                self.progress.setValue(100)
+                self.progress.setFormat("PJe Office instalado com sucesso.")
+                try:
+                    os.startfile(self.PJE_OFFICE_EXECUTABLE)
+                except Exception as exc:
+                    self.logger.warning(
+                        "pje_office_auto_launch_failed",
+                        extra={
+                            "event": "pje_office_auto_launch_failed",
+                            "error": str(exc),
+                        },
+                    )
+            elif install_ok and not validated:
+                result = {
+                    "status": "error",
+                    "message": "Falha ao validar instalacao do PJe Office.",
+                }
+
+        self.waiting_pje_office_install = False
         self._finalize_fix(result)
+
+        if result is not None and result.get("status") in ("installed", "updated", "up_to_date"):
+            self.progress.setRange(0, 100)
+            self.progress.setValue(100)
+            self.progress.setFormat("PJe Office instalado com sucesso.")
+
+    def _check_pje_office_installation(self):
+        if not self.waiting_pje_office_install:
+            if self.pje_office_timer.isActive():
+                self.pje_office_timer.stop()
+            return
+
+        install_pid = PJeOfficeWindows.get_current_install_pid()
+        is_running = False
+        if install_pid:
+            is_running = psutil.pid_exists(install_pid)
+
+        self.pje_office_progress_value += 5 if is_running else 1
+        if self.pje_office_progress_value > 95:
+            self.pje_office_progress_value = 5
+
+        self.progress.setValue(self.pje_office_progress_value)
+        self.progress.setFormat("Instalando PJe Office Pro... %p%")
+        QApplication.processEvents()
 
     def _finalize_fix(self, worker_result):
         print("ENTERED _finalize_fix")
+        if self.pje_office_timer.isActive():
+            self.pje_office_timer.stop()
+        self.waiting_pje_office_install = False
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("Aplicando correções... %p%")

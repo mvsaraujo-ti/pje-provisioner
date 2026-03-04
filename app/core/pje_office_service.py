@@ -12,9 +12,10 @@ class PJeOfficeService:
         installed = windows.is_installed()
 
         if installed and not windows.is_outdated():
+            version = windows.get_pje_office_version() or "desconhecida"
             return {
                 "status": "up_to_date",
-                "message": "PJe Office já está instalado.",
+                "message": f"PJe Office já instalado (versão {version}).",
             }
 
         InstallerDownloader().ensure_installer()

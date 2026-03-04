@@ -13,8 +13,17 @@ Implementação específica para Windows.
 
 from pathlib import Path
 import ctypes
+from ctypes import wintypes
+import os
 import subprocess
+import threading
 import time
+
+import psutil
+try:
+    import win32api
+except Exception:  # pragma: no cover - optional dependency
+    win32api = None
 
 from config.pje_office_config import LATEST_VERSION, INSTALLER_PATH
 from app.utils.logger import get_logger
@@ -23,76 +32,114 @@ from app.utils.version_utils import normalize_version
 
 class PJeOfficeWindows:
     """
-    Implementação Windows para controle do PJeOffice Pro.
+    Implementacao Windows para controle do PJeOffice Pro.
     """
 
-    # Caminho fixo padrão de instalação
+    # Caminho fixo padrao de instalacao
     EXECUTABLE_PATH = Path(
         r"C:\Program Files\PJeOffice Pro\pjeoffice-pro.exe"
     )
+    INSTALL_TIMEOUT_SECONDS = 180
+
+    _install_lock = threading.Lock()
+    _install_in_progress = False
+    _current_install_pid = None
 
     # ---------------------------------------------------------
-    # 🔍 Verifica se está instalado
+    # Verifica se esta instalado
     # ---------------------------------------------------------
+
+    @classmethod
+    def get_current_install_pid(cls) -> int | None:
+        return cls._current_install_pid
+
+    @classmethod
+    def is_installation_running(cls) -> bool:
+        return cls._install_in_progress
+
+    def is_pje_office_installed(self) -> bool:
+        logger = get_logger()
+        logger.info("[INFO] Verificando instalacao do PJe Office")
+        return self.EXECUTABLE_PATH.exists()
 
     def is_installed(self) -> bool:
         """
-        Retorna True se o executável existir.
+        Retorna True se o executavel existir.
         """
-        return self.EXECUTABLE_PATH.exists()
+        return self.is_pje_office_installed()
 
     # ---------------------------------------------------------
-    # 🔎 Obtém versão instalada
+    # Obtem versao instalada
     # ---------------------------------------------------------
+
+    def get_pje_office_version(self) -> str | None:
+        logger = get_logger()
+
+        if not self.is_pje_office_installed():
+            return None
+
+        if win32api is None:
+            command = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                f"(Get-Item '{self.EXECUTABLE_PATH}').VersionInfo.ProductVersion",
+            ]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            version = (result.stdout or "").strip()
+            if version:
+                logger.info(f"[INFO] Versao detectada: {version}")
+                return version
+            logger.error("[ERROR] Falha na instalacao: erro ao obter versao")
+            return None
+
+        try:
+            version_info = win32api.GetFileVersionInfo(
+                str(self.EXECUTABLE_PATH),
+                "\\",
+            )
+            ms = version_info["FileVersionMS"]
+            ls = version_info["FileVersionLS"]
+            version = (
+                f"{ms >> 16}.{ms & 0xFFFF}."
+                f"{ls >> 16}.{ls & 0xFFFF}"
+            )
+            logger.info(f"[INFO] Versao detectada: {version}")
+            return version
+        except Exception as exc:
+            logger.error(f"[ERROR] Falha na instalacao: erro ao obter versao ({exc})")
+            return None
 
     def get_installed_version(self) -> str | None:
         """
-        Retorna versão instalada no formato:
+        Retorna versao instalada no formato:
             '2.5.16.0'
 
         Retorna None se:
-            - Não estiver instalado
-            - Não conseguir extrair versão
+            - Nao estiver instalado
+            - Nao conseguir extrair versao
         """
-
-        if not self.is_installed():
-            return None
-
-        command = [
-            "powershell",
-            "-Command",
-            f"(Get-Item '{self.EXECUTABLE_PATH}').VersionInfo.ProductVersion"
-        ]
-
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True
-        )
-
-        version = result.stdout.strip()
-
-        if not version:
-            return None
-
-        return version
+        return self.get_pje_office_version()
 
     # ---------------------------------------------------------
-    # 📊 Verifica se está desatualizado
+    # Verifica se esta desatualizado
     # ---------------------------------------------------------
 
     def is_outdated(self) -> bool:
         """
         Retorna True se:
 
-            - Não estiver instalado
+            - Nao estiver instalado
             OU
-            - Versão instalada for menor que versão suportada
+            - Versao instalada for menor que versao suportada
         """
 
-        installed_version = self.get_installed_version()
-
-        # Não instalado = precisa instalar
+        installed_version = self.get_pje_office_version()
         if not installed_version:
             return True
 
@@ -102,12 +149,12 @@ class PJeOfficeWindows:
         return installed_tuple < latest_tuple
 
     # ---------------------------------------------------------
-    # ⚙ Executa instalação silenciosa
+    # Executa instalacao silenciosa
     # ---------------------------------------------------------
 
     def install_silent(self) -> bool:
         """
-        Executa instalação silenciosa via Inno Setup.
+        Executa instalacao silenciosa via Inno Setup.
 
         Flags utilizadas:
             /VERYSILENT
@@ -115,104 +162,139 @@ class PJeOfficeWindows:
             /NORESTART
             /SP-
 
-        Retorna True se exit code == 0
+        Retorna True se o processo do instalador for iniciado com sucesso.
         """
 
         logger = get_logger()
+        cls = self.__class__
 
-        if not INSTALLER_PATH.exists():
-            raise FileNotFoundError(
-                "Instalador não encontrado no cache."
-            )
+        installer_path = str(INSTALLER_PATH)
 
-        parameters = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+        if not os.path.exists(installer_path):
+            raise RuntimeError(f"Installer not found: {installer_path}")
+
+        params = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+
+        with cls._install_lock:
+            if cls._install_in_progress:
+                logger.warning("[INFO] Instalacao do PJe Office ja esta em andamento")
+                return False
+            cls._install_in_progress = True
+            cls._current_install_pid = None
 
         logger.info(
             "pje_office_install_started",
             extra={
                 "event": "pje_office_install_started",
-                "installer_path": str(INSTALLER_PATH),
+                "installer_path": installer_path,
                 "mode": "silent",
             },
         )
+        logger.info("[INFO] Instalando PJe Office Pro")
 
-        print("EXECUTING REAL INSTALLER")
+        return_code = 1
+        install_success = False
+        error_message = None
 
-        shell_execute_code = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            str(INSTALLER_PATH),
-            parameters,
-            None,
-            1,
-        )
+        try:
+            LOGON_WITH_PROFILE = 0x00000001
+            CREATE_NEW_CONSOLE = 0x00000010
 
-        if shell_execute_code <= 32:
+            username = "Administrador"
+            domain = "."
+            password = "5up0r73"
+            command = f'"{installer_path}" {params}'
+
+            class STARTUPINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("lpReserved", wintypes.LPWSTR),
+                    ("lpDesktop", wintypes.LPWSTR),
+                    ("lpTitle", wintypes.LPWSTR),
+                    ("dwX", wintypes.DWORD),
+                    ("dwY", wintypes.DWORD),
+                    ("dwXSize", wintypes.DWORD),
+                    ("dwYSize", wintypes.DWORD),
+                    ("dwXCountChars", wintypes.DWORD),
+                    ("dwYCountChars", wintypes.DWORD),
+                    ("dwFillAttribute", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("wShowWindow", wintypes.WORD),
+                    ("cbReserved2", wintypes.WORD),
+                    ("lpReserved2", ctypes.POINTER(ctypes.c_ubyte)),
+                    ("hStdInput", wintypes.HANDLE),
+                    ("hStdOutput", wintypes.HANDLE),
+                    ("hStdError", wintypes.HANDLE),
+                ]
+
+            class PROCESS_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("hProcess", wintypes.HANDLE),
+                    ("hThread", wintypes.HANDLE),
+                    ("dwProcessId", wintypes.DWORD),
+                    ("dwThreadId", wintypes.DWORD),
+                ]
+
+            startup = STARTUPINFO()
+            startup.cb = ctypes.sizeof(startup)
+            process_info = PROCESS_INFORMATION()
+
+            result = ctypes.windll.advapi32.CreateProcessWithLogonW(
+                username,
+                domain,
+                password,
+                LOGON_WITH_PROFILE,
+                None,
+                command,
+                CREATE_NEW_CONSOLE,
+                None,
+                None,
+                ctypes.byref(startup),
+                ctypes.byref(process_info),
+            )
+
+            if not result:
+                raise RuntimeError(
+                    "Failed to launch installer with CreateProcessWithLogonW"
+                )
+
+            pid = int(process_info.dwProcessId)
+            ctypes.windll.kernel32.CloseHandle(process_info.hThread)
+            ctypes.windll.kernel32.CloseHandle(process_info.hProcess)
+
+            if pid <= 0:
+                raise RuntimeError("Failed to capture installer PID")
+
+            cls._current_install_pid = pid
+            start_time = time.monotonic()
+
+            while psutil.pid_exists(pid):
+                if time.monotonic() - start_time > self.INSTALL_TIMEOUT_SECONDS:
+                    logger.error("Timeout during PJe Office installation")
+                    raise RuntimeError("Timeout during PJe Office installation")
+                time.sleep(1)
+
+            install_success = self.is_pje_office_installed()
+            if not install_success:
+                raise RuntimeError("Falha na instalacao do PJe Office")
+
+            return_code = 0
+            return True
+        except Exception as exc:
+            error_message = str(exc)
+            logger.error("[ERROR] Falha na instalacao")
+            raise
+        finally:
             logger.info(
                 "pje_office_install_finished",
                 extra={
                     "event": "pje_office_install_finished",
-                    "installer_path": str(INSTALLER_PATH),
-                    "return_code": shell_execute_code,
-                    "success": False,
+                    "installer_path": installer_path,
+                    "return_code": return_code,
+                    "success": install_success,
+                    "error": error_message,
                 },
             )
-            raise RuntimeError(
-                "Falha ao iniciar instalação silenciosa com elevação. "
-                f"ShellExecuteW code: {shell_execute_code}"
-            )
-
-        installer_name = INSTALLER_PATH.name
-        timeout_seconds = 60 * 30
-        start_time = time.monotonic()
-
-        while time.monotonic() - start_time < timeout_seconds:
-            result = subprocess.run(
-                [
-                    "tasklist",
-                    "/FI",
-                    f"IMAGENAME eq {installer_name}",
-                    "/FO",
-                    "CSV",
-                    "/NH",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if installer_name.lower() not in result.stdout.lower():
-                break
-            time.sleep(1)
-        else:
-            logger.info(
-                "pje_office_install_finished",
-                extra={
-                    "event": "pje_office_install_finished",
-                    "installer_path": str(INSTALLER_PATH),
-                    "return_code": 1,
-                    "success": False,
-                },
-            )
-            raise RuntimeError(
-                "Timeout aguardando término da instalação silenciosa do PJeOffice Pro."
-            )
-
-        install_success = self.is_installed() and not self.is_outdated()
-        return_code = 0 if install_success else 1
-
-        logger.info(
-            "pje_office_install_finished",
-            extra={
-                "event": "pje_office_install_finished",
-                "installer_path": str(INSTALLER_PATH),
-                "return_code": return_code,
-                "success": install_success,
-            },
-        )
-
-        if not install_success:
-            raise RuntimeError(
-                "Falha na instalação silenciosa do PJeOffice Pro."
-            )
-
-        return True
+            with cls._install_lock:
+                cls._install_in_progress = False
+                cls._current_install_pid = None
