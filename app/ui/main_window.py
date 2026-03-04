@@ -130,6 +130,52 @@ class MainWindow(QMainWindow):
         for index, (component, data) in enumerate(self.last_results.items(), start=1):
             status = data["status"]
             message = data["message"]
+            if component == "token" and isinstance(data.get("details"), dict):
+                token_details = data["details"]
+                hardware_text = token_details.get("reader") or token_details.get("model")
+                if not token_details.get("token_detected"):
+                    hardware_text = "Nenhum token conectado"
+
+                driver_name = token_details.get("driver_installed")
+                driver_version = token_details.get("driver_version")
+                if driver_name and driver_version:
+                    driver_text = f"{driver_name} {driver_version}"
+                elif driver_name:
+                    driver_text = f"{driver_name} instalado"
+                else:
+                    driver_text = "NAO INSTALADO"
+
+                message = (
+                    f"TOKEN HARDWARE - {hardware_text}; "
+                    f"TOKEN DRIVER - {driver_text}"
+                )
+
+            if component == "driver" and isinstance(data.get("details"), dict):
+                token_details = data["details"]
+                driver_name = token_details.get("driver_installed")
+                driver_version = token_details.get("driver_version")
+                if driver_name and driver_version:
+                    message = f"TOKEN DRIVER - {driver_name} {driver_version}"
+                elif driver_name:
+                    message = f"TOKEN DRIVER - {driver_name} instalado"
+                else:
+                    message = "TOKEN DRIVER - NAO INSTALADO"
+
+            if component == "browser" and isinstance(data.get("details"), dict):
+                browser_details = data["details"]
+                chrome_text = "OK" if browser_details.get("chrome") else "Not found"
+                edge_text = "OK" if browser_details.get("edge") else "Not found"
+                firefox_text = "OK" if browser_details.get("firefox") else "Not found"
+                recommended = browser_details.get("recommended")
+                recommended_text = str(recommended).capitalize() if recommended else "None"
+                message = (
+                    f"Chrome: {chrome_text}; "
+                    f"Edge: {edge_text}; "
+                    f"Firefox: {firefox_text}; "
+                    f"Navegador recomendado: {recommended_text}"
+                )
+                if browser_details.get("chrome_path"):
+                    message += f"; Chrome path: {browser_details['chrome_path']}"
 
             item_text = f"{component.upper()} → {message}"
             item = QListWidgetItem(item_text)
