@@ -19,6 +19,7 @@ import psutil
 from app.core.scanner import SystemScanner
 from app.core.pje_office_service import PJeOfficeService
 from app.modules.browser_module import run_browser_fix
+from app.modules.token_driver_installer import install_missing_token_driver
 from infra.pje_office_windows import PJeOfficeWindows
 from app.utils.logger import get_logger
 
@@ -27,10 +28,8 @@ class PJeOfficeWorker(QThread):
     finished = Signal(dict)
 
     def run(self):
-        print("ENTERED Worker.run")
         service = PJeOfficeService()
         try:
-            print("CALLING REAL PJE SERVICE")
             result = service.ensure_installed()
         except Exception as exc:
             result = {
@@ -47,7 +46,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("PJE Provisioner")
-        self.setMinimumSize(700, 500)
+        self.setMinimumSize(980, 760)
         self.setStyleSheet(
             "QMainWindow { background-color: #f7f9fc; }"
             "QListWidget { background-color: #ffffff; border: 1px solid #dce3ee; }"
@@ -62,6 +61,8 @@ class MainWindow(QMainWindow):
         self.fix_worker = None
         self.waiting_pje_office_install = False
         self.pje_office_progress_value = 0
+        self.browser_opened_after_fix = False
+
         self.pje_office_timer = QTimer(self)
         self.pje_office_timer.setInterval(1000)
         self.pje_office_timer.timeout.connect(self._check_pje_office_installation)
@@ -77,8 +78,8 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 20px; font-weight: bold;")
         layout.addWidget(title)
 
-        self.btn_scan = QPushButton("Modo Diagnóstico")
-        self.btn_fix = QPushButton("Aplicar Correções")
+        self.btn_scan = QPushButton("Modo Diagnostico")
+        self.btn_fix = QPushButton("Aplicar Correcoes")
         self.btn_scan.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
         )
@@ -86,11 +87,19 @@ class MainWindow(QMainWindow):
             self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
         )
 
+        top_label = QLabel("Acoes")
+        top_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #234;")
+        layout.addWidget(top_label)
         layout.addWidget(self.btn_scan)
         layout.addWidget(self.btn_fix)
 
+        center_label = QLabel("Diagnostico do ambiente")
+        center_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #234;")
+        layout.addWidget(center_label)
+
         self.checklist = QListWidget()
-        layout.addWidget(self.checklist)
+        self.checklist.setMinimumHeight(260)
+        layout.addWidget(self.checklist, 2)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -98,18 +107,21 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Pronto")
         layout.addWidget(self.progress)
 
+        base_label = QLabel("Logs da execucao")
+        base_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #234;")
+        layout.addWidget(base_label)
+
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.setPlaceholderText("Logs aparecerão aqui...")
-        layout.addWidget(self.log_area)
-
-        layout.addStretch(1)
+        self.log_area.setPlaceholderText("Logs aparecerao aqui...")
+        self.log_area.setMinimumHeight(280)
+        layout.addWidget(self.log_area, 3)
 
         footer = QLabel(
             "---------------------------------\n"
             "PJE Environment Provisioner\n\n"
-            "Versão: 0.3.0\n\n"
-            "Developer: Maxwell Araújo\n"
+            "Versao: 0.4.0\n\n"
+            "Developer: Maxwell Araujo\n"
             "Contato: maxwellaraujoti@gmail.com\n"
             "---------------------------------"
         )
@@ -117,9 +129,62 @@ class MainWindow(QMainWindow):
         footer.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(footer)
 
-        # Eventos
         self.btn_scan.clicked.connect(self.run_scan)
         self.btn_fix.clicked.connect(self.run_fix)
+
+    def _decorate_item(self, component: str, status: bool, message: str) -> QListWidgetItem:
+        warning = (
+            "DESATUALIZADO" in message.upper()
+            or "NENHUM TOKEN CONECTADO" in message.upper()
+            or "NAO INSTALADO" in message.upper()
+        )
+        symbol = "✔" if status else ("⚠" if warning else "✖")
+        color = "#1f8f4c" if status else ("#c99700" if warning else "#c63d3d")
+
+        item = QListWidgetItem(f"{symbol} {component.upper()}\n{message}")
+        item.setForeground(QColor(color))
+        if status:
+            icon = QStyle.StandardPixmap.SP_DialogApplyButton
+        elif warning:
+            icon = QStyle.StandardPixmap.SP_MessageBoxWarning
+        else:
+            icon = QStyle.StandardPixmap.SP_MessageBoxCritical
+        item.setIcon(self.style().standardIcon(icon))
+        return item
+
+    def _scan_message_for_component(self, component: str, data: dict) -> str:
+        message = str(data.get("message") or "")
+
+        if component == "token" and isinstance(data.get("details"), dict):
+            details = data["details"]
+            hw = details.get("hardware_label") or "Nenhum token conectado"
+            drv = details.get("driver_installed") or "Driver nao encontrado"
+            ver = details.get("driver_version") or ""
+            if ver:
+                drv = f"{drv} {ver}"
+            return f"TOKEN HARDWARE - {hw}; TOKEN DRIVER - {drv}"
+
+        if component == "driver" and isinstance(data.get("details"), dict):
+            details = data["details"]
+            drv = details.get("driver_installed") or "Driver nao encontrado"
+            ver = details.get("driver_version") or ""
+            if ver:
+                drv = f"{drv} {ver}"
+            return f"TOKEN DRIVER - {drv}"
+
+        if component == "browser" and isinstance(data.get("details"), dict):
+            bd = data["details"]
+            chrome = "OK" if bd.get("chrome") else "Not found"
+            edge = "OK" if bd.get("edge") else "Not found"
+            firefox = "OK" if bd.get("firefox") else "Not found"
+            rec = str(bd.get("recommended") or "None").capitalize()
+            text = f"Chrome: {chrome} | Edge: {edge} | Firefox: {firefox} | Navegador recomendado: {rec}"
+            chrome_path = bd.get("chrome_path")
+            if chrome_path:
+                text += f" | Chrome path: {chrome_path}"
+            return text
+
+        return message
 
     def run_scan(self):
         self.logger.info("scan_started", extra={"event": "scan_started"})
@@ -135,64 +200,13 @@ class MainWindow(QMainWindow):
         total = len(self.last_results)
 
         for index, (component, data) in enumerate(self.last_results.items(), start=1):
-            status = data["status"]
-            message = data["message"]
-            if component == "token" and isinstance(data.get("details"), dict):
-                token_details = data["details"]
-                hardware_text = token_details.get("reader") or token_details.get("model")
-                if not token_details.get("token_detected"):
-                    hardware_text = "Nenhum token conectado"
+            status = bool(data.get("status"))
+            message = self._scan_message_for_component(component, data)
 
-                driver_name = token_details.get("driver_installed")
-                driver_version = token_details.get("driver_version")
-                if driver_name and driver_version:
-                    driver_text = f"{driver_name} {driver_version}"
-                elif driver_name:
-                    driver_text = f"{driver_name} instalado"
-                else:
-                    driver_text = "NAO INSTALADO"
-
-                message = (
-                    f"TOKEN HARDWARE - {hardware_text}; "
-                    f"TOKEN DRIVER - {driver_text}"
-                )
-
-            if component == "driver" and isinstance(data.get("details"), dict):
-                token_details = data["details"]
-                driver_name = token_details.get("driver_installed")
-                driver_version = token_details.get("driver_version")
-                if driver_name and driver_version:
-                    message = f"TOKEN DRIVER - {driver_name} {driver_version}"
-                elif driver_name:
-                    message = f"TOKEN DRIVER - {driver_name} instalado"
-                else:
-                    message = "TOKEN DRIVER - NAO INSTALADO"
-
-            if component == "browser" and isinstance(data.get("details"), dict):
-                browser_details = data["details"]
-                chrome_text = "OK" if browser_details.get("chrome") else "Not found"
-                edge_text = "OK" if browser_details.get("edge") else "Not found"
-                firefox_text = "OK" if browser_details.get("firefox") else "Not found"
-                recommended = browser_details.get("recommended")
-                recommended_text = str(recommended).capitalize() if recommended else "None"
-                message = (
-                    f"Chrome: {chrome_text}; "
-                    f"Edge: {edge_text}; "
-                    f"Firefox: {firefox_text}; "
-                    f"Navegador recomendado: {recommended_text}"
-                )
-                if browser_details.get("chrome_path"):
-                    message += f"; Chrome path: {browser_details['chrome_path']}"
-
-            status_symbol = "✔" if status else "✖"
-            item_text = f"{status_symbol} {component.upper()}\n{message}"
-            item = QListWidgetItem(item_text)
+            item = self._decorate_item(component, status, message)
+            self.checklist.addItem(item)
 
             if status:
-                item.setForeground(QColor("#1f8f4c"))
-                item.setIcon(
-                    self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
-                )
                 self.log_area.append(f"[OK] {message}")
                 self.logger.info(
                     "scan_component_ok",
@@ -204,10 +218,6 @@ class MainWindow(QMainWindow):
                     },
                 )
             else:
-                item.setForeground(QColor("#c63d3d"))
-                item.setIcon(
-                    self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical)
-                )
                 self.log_area.append(f"[ERRO] {message}")
                 self.logger.warning(
                     "scan_component_error",
@@ -219,50 +229,39 @@ class MainWindow(QMainWindow):
                     },
                 )
 
-            self.checklist.addItem(item)
-
             progress_pct = int((index / total) * 100) if total else 100
             self.progress.setValue(progress_pct)
             QApplication.processEvents()
 
-        self.log_area.append("\nVarredura concluída.\n")
-        self.progress.setFormat("Varredura concluída")
+        self.log_area.append("\nVarredura concluida.\n")
+        self.progress.setFormat("Varredura concluida")
         self.btn_scan.setEnabled(True)
         self.btn_fix.setEnabled(True)
         self.logger.info(
             "scan_finished",
-            extra={
-                "event": "scan_finished",
-                "items_total": total,
-            },
+            extra={"event": "scan_finished", "items_total": total},
         )
 
     def run_fix(self):
-        print("ENTERED run_fix")
-        print("SIMULATION CHECK: no scanner.run_simulated_fixes call in run_fix")
+        self.browser_opened_after_fix = False
         if not self.last_results:
-            self.log_area.append("[ERRO] Execute a varredura antes de aplicar correções.\n")
-            self.logger.error(
-                "fix_blocked_without_scan",
-                extra={"event": "fix_blocked_without_scan"},
-            )
+            self.log_area.append("[ERRO] Execute a varredura antes de aplicar correcoes.\n")
+            self.logger.error("fix_blocked_without_scan", extra={"event": "fix_blocked_without_scan"})
             return
 
         self.logger.info("fix_started", extra={"event": "fix_started"})
         self.btn_scan.setEnabled(False)
         self.btn_fix.setEnabled(False)
         self.progress.setRange(0, 0)
-        self.progress.setFormat("Aplicando correções...")
-        self.log_area.append("Iniciando correções reais...\n")
+        self.progress.setFormat("Aplicando correcoes...")
+        self.log_area.append("Iniciando correcoes reais...\n")
 
-        needs_pje_office_fix = False
-        for component, data in self.last_results.items():
-            if component == "pje_office" and not data["status"]:
-                needs_pje_office_fix = True
-                break
+        needs_pje_office_fix = any(
+            comp == "pje_office" and not bool(data.get("status"))
+            for comp, data in self.last_results.items()
+        )
 
         if needs_pje_office_fix:
-            print("run_fix: calling REAL SERVICE in worker thread")
             self.waiting_pje_office_install = True
             self.pje_office_progress_value = 0
             self.progress.setRange(0, 100)
@@ -275,7 +274,6 @@ class MainWindow(QMainWindow):
             self.fix_worker.start()
             return
 
-        print("run_fix: no real/simulated fix call needed, finalizing")
         self._finalize_fix(None)
 
     def _on_fix_finished(self, result):
@@ -287,17 +285,11 @@ class MainWindow(QMainWindow):
             self.pje_office_timer.stop()
 
         if self.waiting_pje_office_install:
-            install_ok = (
-                result is not None
-                and result.get("status") in ("installed", "updated", "up_to_date")
-            )
+            install_ok = result is not None and result.get("status") in ("installed", "updated", "up_to_date")
             validated = os.path.exists(self.PJE_OFFICE_EXECUTABLE)
 
             if install_ok and validated:
-                result = {
-                    "status": "installed",
-                    "message": "PJe Office instalado com sucesso.",
-                }
+                result = {"status": "installed", "message": "PJe Office instalado com sucesso."}
                 self.log_area.append("PJe Office instalado com sucesso.")
                 self.progress.setRange(0, 100)
                 self.progress.setValue(100)
@@ -307,24 +299,13 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self.logger.warning(
                         "pje_office_auto_launch_failed",
-                        extra={
-                            "event": "pje_office_auto_launch_failed",
-                            "error": str(exc),
-                        },
+                        extra={"event": "pje_office_auto_launch_failed", "error": str(exc)},
                     )
             elif install_ok and not validated:
-                result = {
-                    "status": "error",
-                    "message": "Falha ao validar instalacao do PJe Office.",
-                }
+                result = {"status": "error", "message": "Falha ao validar instalacao do PJe Office."}
 
         self.waiting_pje_office_install = False
         self._finalize_fix(result)
-
-        if result is not None and result.get("status") in ("installed", "updated", "up_to_date"):
-            self.progress.setRange(0, 100)
-            self.progress.setValue(100)
-            self.progress.setFormat("PJe Office instalado com sucesso.")
 
     def _check_pje_office_installation(self):
         if not self.waiting_pje_office_install:
@@ -333,9 +314,7 @@ class MainWindow(QMainWindow):
             return
 
         install_pid = PJeOfficeWindows.get_current_install_pid()
-        is_running = False
-        if install_pid:
-            is_running = psutil.pid_exists(install_pid)
+        is_running = bool(install_pid and psutil.pid_exists(install_pid))
 
         self.pje_office_progress_value += 5 if is_running else 1
         if self.pje_office_progress_value > 95:
@@ -346,81 +325,75 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
     def _finalize_fix(self, worker_result):
-        print("ENTERED _finalize_fix")
         if self.pje_office_timer.isActive():
             self.pje_office_timer.stop()
         self.waiting_pje_office_install = False
+
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setFormat("Aplicando correções... %p%")
+        self.progress.setFormat("Aplicando correcoes... %p%")
 
         fixed_results = {}
         component_order = ["token", "driver", "pje_office", "browser"]
         ordered_components = [c for c in component_order if c in self.last_results]
-        ordered_components.extend(
-            [c for c in self.last_results.keys() if c not in ordered_components]
-        )
+        ordered_components.extend([c for c in self.last_results if c not in ordered_components])
 
         for component in ordered_components:
             data = self.last_results[component]
-            status = data["status"]
+            status = bool(data.get("status"))
 
             if component == "pje_office" and not status:
-                print("_finalize_fix: using REAL SERVICE result for pje_office")
                 result = worker_result or {
                     "status": "error",
-                    "message": "Falha ao obter resultado da instalação.",
+                    "message": "Falha ao obter resultado da instalacao.",
                 }
                 fixed_results[component] = {
-                    "status": result["status"] in ("installed", "updated", "up_to_date"),
-                    "message": result["message"],
+                    "status": result.get("status") in ("installed", "updated", "up_to_date"),
+                    "message": result.get("message"),
                 }
-            elif component == "browser" and not status:
-                self.logger.info(
-                    "BROWSER_FIX_STARTED",
-                    extra={"event": "BROWSER_FIX_STARTED"},
-                )
 
-                browser_ok = False
-                try:
-                    browser_result = run_browser_fix()
-                    browser_ok = browser_result.get("status") == "ok"
-                except Exception:
-                    browser_ok = False
-
-                self.logger.info(
-                    "BROWSER_FIX_COMPLETED",
-                    extra={
-                        "event": "BROWSER_FIX_COMPLETED",
-                        "success": browser_ok,
-                    },
-                )
-
-                if browser_ok:
-                    fixed_results[component] = {
-                        "status": True,
-                        "message": "Correções de navegador aplicadas",
-                    }
+            elif component == "driver" and not status:
+                self.log_area.append("Instalando driver do token...")
+                token_details = self.last_results.get("token", {}).get("details", {})
+                install_result = install_missing_token_driver(token_details)
+                if install_result.get("status") == "ok":
+                    self.log_area.append("[OK] Driver do token instalado. Reexecutando diagnostico...")
+                    rescanned = self.scanner.run_full_scan()
+                    fixed_results["token"] = rescanned.get("token", self.last_results.get("token", {}))
+                    fixed_results["driver"] = rescanned.get("driver", data)
                 else:
                     fixed_results[component] = {
                         "status": False,
-                        "message": "Falha ao corrigir navegador",
+                        "message": install_result.get("message", "Falha ao instalar driver do token"),
                     }
+
+            elif component == "browser" and not status:
+                self.logger.info("BROWSER_FIX_STARTED", extra={"event": "BROWSER_FIX_STARTED"})
+                browser_result = run_browser_fix()
+                browser_ok = browser_result.get("status") == "ok"
+                if browser_ok:
+                    self.browser_opened_after_fix = True
+                self.logger.info(
+                    "BROWSER_FIX_COMPLETED",
+                    extra={"event": "BROWSER_FIX_COMPLETED", "success": browser_ok},
+                )
+                fixed_results[component] = {
+                    "status": browser_ok,
+                    "message": "Correcoes de navegador aplicadas" if browser_ok else "Falha ao corrigir navegador",
+                }
+
             else:
                 fixed_results[component] = data
-        total = len(fixed_results)
 
         self.checklist.clear()
+        total = len(fixed_results)
         for index, (component, data) in enumerate(fixed_results.items(), start=1):
-            status = data["status"]
-            message = data["message"]
-            item = QListWidgetItem(f"{component.upper()} → {message}")
+            status = bool(data.get("status"))
+            message = self._scan_message_for_component(component, data)
+            item = self._decorate_item(component, status, message)
+            self.checklist.addItem(item)
 
             if status:
-                item.setForeground(QColor("green"))
-                item.setIcon(
-                    self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
-                )
                 self.log_area.append(f"[OK] {message}")
                 self.logger.info(
                     "fix_component_ok",
@@ -432,10 +405,6 @@ class MainWindow(QMainWindow):
                     },
                 )
             else:
-                item.setForeground(QColor("red"))
-                item.setIcon(
-                    self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxCritical)
-                )
                 self.log_area.append(f"[ERRO] {message}")
                 self.logger.warning(
                     "fix_component_error",
@@ -447,21 +416,20 @@ class MainWindow(QMainWindow):
                     },
                 )
 
-            self.checklist.addItem(item)
-
             progress_pct = int((index / total) * 100) if total else 100
             self.progress.setValue(progress_pct)
             QApplication.processEvents()
 
         self.last_results = fixed_results
-        self.log_area.append("\nCorreções concluídas.\n")
-        self.progress.setFormat("Correções concluídas")
+        self.log_area.append("\nCorrecoes concluidas.\n")
+        self.progress.setFormat("Correcoes concluidas")
         self.btn_scan.setEnabled(True)
         self.btn_fix.setEnabled(True)
-        self.logger.info(
-            "fix_finished",
-            extra={
-                "event": "fix_finished",
-                "items_total": total,
-            },
-        )
+        self.logger.info("fix_finished", extra={"event": "fix_finished", "items_total": total})
+
+        all_ok = all(bool(item.get("status")) for item in fixed_results.values()) if fixed_results else False
+        if all_ok and not self.browser_opened_after_fix:
+            browser_result = run_browser_fix()
+            if browser_result.get("status") == "ok":
+                self.browser_opened_after_fix = True
+                self.log_area.append("[OK] Chrome aberto na pagina inicial do PJe.")

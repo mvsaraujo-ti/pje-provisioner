@@ -1,7 +1,22 @@
 from __future__ import annotations
 
+import os
+import subprocess
+
 from app.infra import browser_windows
 from app.utils.logger import get_logger
+
+CHROME_CANDIDATES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+
+def _detect_chrome_path() -> str | None:
+    for path in CHROME_CANDIDATES:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def run_browser_fix() -> dict:
@@ -15,7 +30,7 @@ def run_browser_fix() -> dict:
     logger = get_logger()
 
     try:
-        browser_path = browser_windows.detect_browser()
+        browser_path = _detect_chrome_path()
         if not browser_path:
             logger.error(
                 "browser_fix_failed_no_browser",
@@ -23,7 +38,7 @@ def run_browser_fix() -> dict:
             )
             return {
                 "status": "error",
-                "message": "Nenhum navegador suportado foi encontrado.",
+                "message": "Chrome não encontrado no sistema.",
             }
 
         logger.info(
@@ -33,11 +48,11 @@ def run_browser_fix() -> dict:
 
         browser_windows.close_chrome()
         browser_windows.clear_chrome_cache()
-        browser_windows.open_browser(browser_windows.PJE_URL)
+        subprocess.Popen([browser_path, browser_windows.PJE_URL])
 
         return {
             "status": "ok",
-            "message": "Correcao de navegador executada com sucesso.",
+            "message": "Chrome aberto com sucesso na página do PJe.",
             "browser_path": browser_path,
             "url": browser_windows.PJE_URL,
         }
