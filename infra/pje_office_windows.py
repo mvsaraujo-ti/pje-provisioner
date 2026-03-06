@@ -35,10 +35,12 @@ class PJeOfficeWindows:
     Implementacao Windows para controle do PJeOffice Pro.
     """
 
-    # Caminho fixo padrao de instalacao
-    EXECUTABLE_PATH = Path(
-        r"C:\Program Files\PJeOffice Pro\pjeoffice-pro.exe"
-    )
+    EXECUTABLE_CANDIDATES = [
+        Path(r"C:\Program Files\PJeOffice Pro\PJeOffice.exe"),
+        Path(r"C:\Program Files (x86)\PJeOffice Pro\PJeOffice.exe"),
+        Path(r"C:\Program Files\PJeOffice Pro\pjeoffice-pro.exe"),
+        Path(r"C:\Program Files (x86)\PJeOffice Pro\pjeoffice-pro.exe"),
+    ]
     INSTALL_TIMEOUT_SECONDS = 180
 
     _install_lock = threading.Lock()
@@ -57,10 +59,48 @@ class PJeOfficeWindows:
     def is_installation_running(cls) -> bool:
         return cls._install_in_progress
 
+    def get_executable_path(self) -> Path | None:
+        for path in self.EXECUTABLE_CANDIDATES:
+            if path.exists():
+                return path
+        return None
+
     def is_pje_office_installed(self) -> bool:
         logger = get_logger()
         logger.info("[INFO] Verificando instalacao do PJe Office")
-        return self.EXECUTABLE_PATH.exists()
+        return self.get_executable_path() is not None
+
+    def is_running(self) -> bool:
+        process_names = {"pjeoffice.exe", "pjeoffice-pro.exe"}
+        for proc in psutil.process_iter(attrs=["name"]):
+            name = str(proc.info.get("name") or "").strip().lower()
+            if name in process_names:
+                return True
+        return False
+
+    def start_if_needed(self, wait_seconds: int = 3) -> bool:
+        logger = get_logger()
+        if self.is_running():
+            logger.info("[INFO] PJeOffice ja esta em execucao.")
+            return True
+
+        executable = self.get_executable_path()
+        if executable is None:
+            logger.error("[ERROR] Executavel do PJeOffice nao encontrado.")
+            return False
+
+        try:
+            logger.info("[INFO] Iniciando PJeOffice Pro...")
+            subprocess.Popen([str(executable)])
+            time.sleep(wait_seconds)
+            if self.is_running():
+                logger.info("[OK] PJeOffice iniciado.")
+                return True
+            logger.error("[ERROR] PJeOffice nao iniciou apos tentativa de execucao.")
+            return False
+        except Exception as exc:
+            logger.error(f"[ERROR] Falha ao iniciar PJeOffice ({exc})")
+            return False
 
     def is_installed(self) -> bool:
         """
@@ -75,7 +115,8 @@ class PJeOfficeWindows:
     def get_pje_office_version(self) -> str | None:
         logger = get_logger()
 
-        if not self.is_pje_office_installed():
+        executable = self.get_executable_path()
+        if executable is None:
             return None
 
         if win32api is None:
@@ -83,13 +124,14 @@ class PJeOfficeWindows:
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                f"(Get-Item '{self.EXECUTABLE_PATH}').VersionInfo.ProductVersion",
+                f"(Get-Item '{executable}').VersionInfo.ProductVersion",
             ]
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             version = (result.stdout or "").strip()
             if version:
@@ -100,7 +142,7 @@ class PJeOfficeWindows:
 
         try:
             version_info = win32api.GetFileVersionInfo(
-                str(self.EXECUTABLE_PATH),
+                str(executable),
                 "\\",
             )
             ms = version_info["FileVersionMS"]

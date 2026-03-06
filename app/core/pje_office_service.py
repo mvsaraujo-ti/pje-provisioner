@@ -1,7 +1,8 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from infra.downloader import InstallerDownloader
-from infra.pje_office_windows import PJeOfficeWindows
+from app.infra.downloader import InstallerDownloader
+from app.infra.pje_office_windows import PJeOfficeWindows
 
 
 class PJeOfficeService:

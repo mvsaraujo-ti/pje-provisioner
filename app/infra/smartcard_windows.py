@@ -6,6 +6,8 @@ import subprocess
 
 from app.utils.logger import get_logger
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def _extract_vid_pid(pnp_id: str) -> tuple[str | None, str | None]:
     vid_match = re.search(r"VID_([0-9A-Fa-f]{4})", pnp_id or "")
@@ -25,7 +27,9 @@ def _normalize_provider(text: str | None) -> str | None:
         return "WatchData"
     if "feitian" in lowered:
         return "Feitian"
-    if "gd" in lowered or "starsign" in lowered or "safesign" in lowered:
+    if "safesign" in lowered:
+        return "SafeSign"
+    if "gd" in lowered or "starsign" in lowered:
         return "GD"
     return text.strip()
 
@@ -45,16 +49,8 @@ def _is_likely_real_token_card(card: dict) -> bool:
     if any(marker in combined for marker in generic_markers):
         return False
 
-    vendor_markers = [
-        "safenet",
-        "aladdin",
-        "gemalto",
-        "etoken",
-        "watchdata",
-        "feitian",
-        "gd",
-    ]
-    return any(marker in combined for marker in vendor_markers)
+    # Qualquer smartcard "ok" que nao seja filtro/generica deve ser tratada como token.
+    return bool(name.strip())
 
 
 def _json_list(payload: str) -> list[dict]:
@@ -83,7 +79,13 @@ def _collect_smartcard_pnp() -> tuple[list[dict], list[dict]]:
             "$all | Select-Object FriendlyName,Class,Status,InstanceId,Manufacturer | ConvertTo-Json -Compress"
         ),
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=NO_WINDOW,
+    )
     devices = _json_list((res.stdout or "").strip()) if res.returncode == 0 else []
 
     readers: list[dict] = []
@@ -111,6 +113,48 @@ def _collect_smartcard_pnp() -> tuple[list[dict], list[dict]]:
     return readers, cards
 
 
+def _collect_certutil_scinfo() -> dict:
+    cmd = ["certutil", "-scinfo"]
+    res = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=NO_WINDOW,
+    )
+    text = f"{res.stdout or ''}\n{res.stderr or ''}"
+    lowered = text.lower()
+
+    # Indicadores comuns quando nao existe cartao/token no leitor.
+    no_card_markers = [
+        "no card",
+        "nenhum cart",
+        "cannot find a smart card",
+    ]
+    has_no_card = any(marker in lowered for marker in no_card_markers)
+
+    reader = None
+    card = None
+    provider = None
+    reader_match = re.search(r"(?im)^\s*Reader(?:\[\d+\])?\s*:\s*(.+)$", text)
+    if reader_match:
+        reader = reader_match.group(1).strip()
+    card_match = re.search(r"(?im)^\s*Card(?:\[\d+\])?\s*:\s*(.+)$", text)
+    if card_match:
+        card = card_match.group(1).strip()
+    provider_match = re.search(r"(?im)^\s*Provider(?:\[\d+\])?\s*:\s*(.+)$", text)
+    if provider_match:
+        provider = provider_match.group(1).strip()
+
+    token_connected = bool(card and not has_no_card)
+    return {
+        "token_connected": token_connected,
+        "reader": reader,
+        "card": card,
+        "provider": _normalize_provider(provider),
+    }
+
+
 def get_connected_smartcards() -> dict:
     """
     Detecta token conectado sem abrir popup/PIN.
@@ -127,7 +171,8 @@ def get_connected_smartcards() -> dict:
             connected_card = card
             break
 
-    token_connected = connected_card is not None
+    certutil_info = _collect_certutil_scinfo()
+    token_connected = connected_card is not None or bool(certutil_info.get("token_connected"))
     if not token_connected:
         payload = {
             "token_connected": False,
@@ -135,17 +180,19 @@ def get_connected_smartcards() -> dict:
         }
     else:
         provider_text = (
-            connected_card.get("manufacturer")
-            or connected_card.get("name")
+            (connected_card or {}).get("manufacturer")
+            or (connected_card or {}).get("name")
+            or certutil_info.get("provider")
+            or certutil_info.get("card")
             or ""
         )
         payload = {
             "token_connected": True,
-            "reader": connected_card.get("name"),
-            "card": "ICP-Brasil A3",
+            "reader": (connected_card or {}).get("name") or certutil_info.get("reader"),
+            "card": (connected_card or {}).get("name") or certutil_info.get("card") or "ICP-Brasil A3",
             "provider": _normalize_provider(provider_text),
-            "usb_vid": connected_card.get("usb_vid"),
-            "usb_pid": connected_card.get("usb_pid"),
+            "usb_vid": (connected_card or {}).get("usb_vid"),
+            "usb_pid": (connected_card or {}).get("usb_pid"),
             "readers": readers,
         }
 

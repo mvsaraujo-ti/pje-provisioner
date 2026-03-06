@@ -8,10 +8,21 @@ __pycache__/
 venv/
 env/
 
+# Python build artifacts
+*.pyd
+*.pyo
+*.so
+
 # Distribution / packaging
 build/
 dist/
 *.egg-info/
+*.spec
+
+# PyInstaller
+*.manifest
+*.exe
+*.dll
 
 # Tool caches
 .pytest_cache/
@@ -31,8 +42,13 @@ htmlcov/
 Thumbs.db
 
 # Logs
-logs/*.log
+logs/
+*.log
 
 # Local config overrides
 .env
 .env.*
+
+# Temporary files
+*.tmp
+*.temp

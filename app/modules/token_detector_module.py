@@ -50,6 +50,21 @@ def _classify_from_smartcard_reader(readers: list[dict]) -> tuple[str | None, st
     return None, None
 
 
+def _classify_token_kind(*values: str | None) -> str | None:
+    text = " ".join(str(v or "") for v in values).lower()
+    if "safesign" in text:
+        return "SafeSign"
+    if any(token in text for token in ("safenet", "aladdin", "gemalto", "etoken")):
+        return "SafeNet"
+    if "gd" in text or "starsign" in text:
+        return "GD"
+    if "watchdata" in text:
+        return "WatchData"
+    if "feitian" in text:
+        return "Feitian"
+    return None
+
+
 def _classify_driver_name(drivers: list[dict]) -> str | None:
     if not drivers:
         return None
@@ -122,14 +137,20 @@ def detect_token_hardware() -> dict:
 
     installed_driver_name = _classify_driver_name(drivers)
 
+    token_kind = _classify_token_kind(
+        vendor,
+        model,
+        reader_name,
+        card_name,
+        provider_name,
+    )
+
     if token_connected:
-        vendor_lower = str((vendor or "")).lower()
-        if "gd" in vendor_lower or "safesign" in vendor_lower:
-            hardware_label = "Token A3 GD conectado"
-        elif "safenet" in vendor_lower or "aladdin" in vendor_lower or "gemalto" in vendor_lower:
-            hardware_label = "Token A3 SafeNet conectado"
+        if token_kind:
+            hardware_label = f"Token {token_kind} detectado"
+            vendor = token_kind
         else:
-            hardware_label = f"Token detectado ({model or 'desconhecido'})"
+            hardware_label = "Token detectado"
     else:
         hardware_label = "Nenhum token conectado"
 

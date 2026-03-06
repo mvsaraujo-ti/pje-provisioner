@@ -5,6 +5,8 @@ import re
 import subprocess
 import winreg
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 DEVICE_KEYWORDS = [
     "smartcard",
@@ -69,7 +71,13 @@ def detect_usb_devices() -> list[dict]:
         ),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=NO_WINDOW,
+    )
     if result.returncode != 0:
         return []
 
@@ -104,7 +112,13 @@ def detect_smartcard_readers() -> list[dict]:
         ),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=NO_WINDOW,
+    )
     if result.returncode != 0:
         return []
 
@@ -208,4 +222,3 @@ def get_driver_version(drivers: list[dict] | None = None) -> str | None:
         if version:
             return version
     return None
-

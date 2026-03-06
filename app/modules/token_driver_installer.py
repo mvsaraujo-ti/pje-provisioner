@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-import os
 import subprocess
+from pathlib import Path
 
 from app.utils.logger import get_logger
+from app.utils.paths import resource_path
 
 
-SAFE_SIGN_INSTALLER = r"c:\Workspace\pje-provisioner\infra\drivers\safesign.exe"
-SAFE_NET_INSTALLER = r"c:\Workspace\pje-provisioner\infra\drivers\safenet.exe"
+def _driver_path(filename: str) -> str:
+    return str(resource_path("infra", "drivers", filename))
+
+
+SAFE_SIGN_INSTALLER = _driver_path("safesign.exe")
+SAFE_NET_INSTALLER = _driver_path("safenet.exe")
 
 
 def _detect_target_driver(token_details: dict | None) -> str | None:
@@ -48,9 +53,10 @@ def install_missing_token_driver(token_details: dict | None = None) -> dict:
                 "error": "driver target not identified",
             },
         )
-        return {"status": "error", "message": "Não foi possível identificar driver do token."}
+        return {"status": "error", "message": "Nao foi possivel identificar driver do token."}
 
-    if not os.path.exists(installer):
+    installer_path = Path(installer)
+    if not installer_path.exists():
         logger.error(
             "driver_install_finished",
             extra={
@@ -59,7 +65,7 @@ def install_missing_token_driver(token_details: dict | None = None) -> dict:
                 "error": f"installer not found: {installer}",
             },
         )
-        return {"status": "error", "message": f"Instalador não encontrado: {installer}"}
+        return {"status": "error", "message": f"Instalador nao encontrado: {installer}"}
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -77,12 +83,11 @@ def install_missing_token_driver(token_details: dict | None = None) -> dict:
             return {"status": "ok", "message": f"{driver_name} instalado com sucesso."}
         return {
             "status": "error",
-            "message": f"Falha na instalação do driver ({driver_name}). Código {result.returncode}",
+            "message": f"Falha na instalacao do driver ({driver_name}). Codigo {result.returncode}",
         }
     except Exception as exc:
         logger.error(
             "driver_install_finished",
             extra={"event": "driver_install_finished", "success": False, "error": str(exc)},
         )
-        return {"status": "error", "message": f"Falha na instalação do driver: {exc}"}
-
+        return {"status": "error", "message": f"Falha na instalacao do driver: {exc}"}

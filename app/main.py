@@ -1,8 +1,18 @@
-import sys
+# -*- coding: utf-8 -*-
 import ctypes
+import os
+import sys
+
 from PySide6.QtWidgets import QApplication
+
 from app.ui.main_window import MainWindow
 from app.utils.logger import get_logger
+
+os.environ.setdefault("PYTHONUTF8", "1")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 
 def main():

@@ -10,6 +10,7 @@ CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
 ]
+PJE_URL = "https://pje.tjma.jus.br"
 
 
 def _detect_chrome_path() -> str | None:
@@ -19,14 +20,34 @@ def _detect_chrome_path() -> str | None:
     return None
 
 
-def run_browser_fix() -> dict:
-    """
-    Executa correcao de navegador:
-    1) detecta navegador
-    2) fecha chrome
-    3) limpa cache do chrome
-    4) abre navegador no PJe
-    """
+def open_chrome(url: str = PJE_URL) -> dict:
+    logger = get_logger()
+    chrome_path = _detect_chrome_path()
+    if not chrome_path:
+        logger.error("chrome_not_found", extra={"event": "chrome_not_found"})
+        return {"status": "error", "message": "Chrome nao encontrado."}
+
+    try:
+        subprocess.Popen([chrome_path, url])
+        logger.info(
+            "chrome_opened",
+            extra={"event": "chrome_opened", "browser_path": chrome_path, "url": url},
+        )
+        return {
+            "status": "ok",
+            "message": "Chrome aberto com sucesso.",
+            "browser_path": chrome_path,
+            "url": url,
+        }
+    except Exception as exc:
+        logger.error(
+            "chrome_open_failed",
+            extra={"event": "chrome_open_failed", "error": str(exc)},
+        )
+        return {"status": "error", "message": f"Falha ao abrir Chrome: {exc}"}
+
+
+def run_browser_fix(launch_browser: bool = True) -> dict:
     logger = get_logger()
 
     try:
@@ -36,10 +57,7 @@ def run_browser_fix() -> dict:
                 "browser_fix_failed_no_browser",
                 extra={"event": "browser_fix_failed_no_browser"},
             )
-            return {
-                "status": "error",
-                "message": "Chrome não encontrado no sistema.",
-            }
+            return {"status": "error", "message": "Chrome nao encontrado no sistema."}
 
         logger.info(
             "browser_detected",
@@ -48,20 +66,21 @@ def run_browser_fix() -> dict:
 
         browser_windows.close_chrome()
         browser_windows.clear_chrome_cache()
-        subprocess.Popen([browser_path, browser_windows.PJE_URL])
+
+        if launch_browser:
+            open_result = open_chrome(PJE_URL)
+            if open_result.get("status") != "ok":
+                return open_result
 
         return {
             "status": "ok",
-            "message": "Chrome aberto com sucesso na página do PJe.",
+            "message": "Correcoes de navegador aplicadas com sucesso.",
             "browser_path": browser_path,
-            "url": browser_windows.PJE_URL,
+            "url": PJE_URL,
         }
     except Exception as exc:
         logger.error(
             "browser_fix_failed",
             extra={"event": "browser_fix_failed", "error": str(exc)},
         )
-        return {
-            "status": "error",
-            "message": "Falha ao corrigir navegador",
-        }
+        return {"status": "error", "message": "Falha ao corrigir navegador"}
